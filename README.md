@@ -20,10 +20,12 @@ graph TD
     Planner --> BQML[BigQuery ML Agent]
     Planner --> PythonML[Python ML Sandbox Agent]
     
-    subgraph Custom Modeling Sandbox
-        PythonML -- Stage Data --> GCS[(Cloud Storage)]
-        PythonML -- Validate & Run --> Sandbox((Isolated Python Sandbox))
-        Sandbox -- Save Model --> Registry[(Vertex AI Model Registry)]
+    subgraph Hybrid Computational Sandbox
+        PythonML -- 1. Stage BQ Data --> GCS[(Cloud Storage Staging)]
+        PythonML -- 2. Download Locally & Package --> Sandbox((Isolated Python Sandbox))
+        Sandbox -- 3. Train & Save Model locally --> PythonML
+        PythonML -- 4. Stage Model Binary --> GCS
+        PythonML -- 5. Expose & Register Model --> Registry[(Vertex AI Model Registry)]
     end
 ```
 
@@ -31,7 +33,7 @@ graph TD
 - **Root Planner Agent:** Orchestrates the session, maps out the execution strategy, solicits human approval for execution, and delegates tasks.
 - **BigQuery Conversational Analytics via ADK BQ tool Agent:** Translates natural language queries into Standard SQL using the ADK BigQuery tools and executes them against BigQuery.
 - **BigQuery ML Specialist:** Designs, trains, and evaluates SQL-based BigQuery ML models.
-- **Python ML Sandbox Specialist:** Handles custom Python machine learning runs (`scikit-learn`, `XGBoost`, `lightgbm`, `xgboost`, `keras`, `pytorch`, etc.). Stages large datasets (up to 100MB) to Cloud Storage, trains models inside isolated sandboxed containers via `AgentEngineSandboxCodeExecutor`, and registers model binaries to the **Vertex AI Model Registry**.
+- **Python ML Sandbox Specialist:** Handles custom Python machine learning runs (`scikit-learn`, `tensorflow`). Stages large datasets (up to 100MB) to Cloud Storage, coordinates local data packaging, trains models inside isolated sandboxed containers via `AgentEngineSandboxCodeExecutor`, and dynamically registers model binaries to the **Vertex AI Model Registry** from the host environment.
 
 ---
 
@@ -43,8 +45,8 @@ To prevent monolithic system prompts from overwhelming LLM context windows, this
 - **Layer 2 (Instructions):** Core `SKILL.md` instructions loaded dynamically only when the agent triggers the skill.
 - **Layer 3 (Resources):** Comprehensive code examples and reference architectures (`references/platform_guide.md`) loaded on-demand using the `load_skill_resource` tool.
 
-### GCS Staging for Large Datasets (Up to 100MB)
-To avoid payload serialization bottlenecks inside API requests, datasets exceeding standard strings constraints are staged to GCS via `export_bq_to_gcs` prior to sandbox execution. The Python training script then reads the data directly from GCS via standard pandas file streams.
+### Hybrid GCS Staging for Large Datasets (Up to 100MB)
+To avoid payload serialization bottlenecks inside API requests, datasets exceeding standard strings constraints are staged to GCS via `export_bq_to_gcs` prior to sandbox execution. The host tool dynamically downloads the GCS CSV bytes, encodes them to a base64 UTF-8 string, and packages them as local container input files. The Python training script reads `"input.csv"` locally and serializes the output locally to `"model.joblib"`, which the host tool then captures, uploads to GCS, and registers directly in Vertex AI.
 
 ---
 
