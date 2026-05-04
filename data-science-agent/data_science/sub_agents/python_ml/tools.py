@@ -109,7 +109,9 @@ def execute_sandbox_ml_script(code: str, tool_context: ToolContext) -> dict:
         csv_bytes = csv_blob.download_as_bytes()
         
         # 2. Package dataset CSV as an input file to the Sandbox container
-        input_file = File(name="input.csv", content=csv_bytes)
+        import base64
+        encoded_content = base64.b64encode(csv_bytes).decode("utf-8")
+        input_file = File(name="input.csv", content=encoded_content, mime_type="text/csv")
         
         logger.info("Obtaining sandboxed code executor instance...")
         executor = get_code_executor()
