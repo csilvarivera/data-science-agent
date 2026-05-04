@@ -1,0 +1,9 @@
+{
+  "datasets": [
+    {
+      "name": "matt-ai-sales",
+      "type": "bigquery",
+      "description": "Sales and marketing data from your project, data_science dataset."
+    }
+  ]
+}

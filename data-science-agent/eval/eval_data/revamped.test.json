@@ -1,0 +1,22 @@
+{
+  "eval_set_id": "revamped_test",
+  "name": "Revamped Test Set",
+  "description": "Tests core capabilities after revamp",
+  "eval_cases": [
+    {
+      "eval_id": "countries_test",
+      "conversation": [
+        {
+          "invocation_id": "inv_1",
+          "user_content": { "parts": [{ "text": "what countries are in test?" }] },
+          "intermediate_data": {
+            "tool_uses": [
+              { "name": "call_bigquery_agent", "args": { "question": "what countries are in test?" } }
+            ]
+          }
+        }
+      ],
+      "session_input": { "app_name": "data_science", "user_id": "user_1", "state": {} }
+    }
+  ]
+}
