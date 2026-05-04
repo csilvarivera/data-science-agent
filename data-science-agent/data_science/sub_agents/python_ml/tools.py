@@ -19,7 +19,8 @@ def export_bq_to_gcs(table_id: str) -> dict:
     """
     logger.info(f"Extracting data from table: {table_id}")
     try:
-        client = bigquery.Client(location=os.getenv("BQ_LOCATION", "US"))
+        bq_location = os.getenv("BQ_LOCATION", "US")
+        client = bigquery.Client(location=bq_location)
         
         bucket_uri = os.getenv("MODEL_STAGING_BUCKET", "")
         if not bucket_uri:
@@ -48,7 +49,7 @@ def export_bq_to_gcs(table_id: str) -> dict:
         extract_job = client.extract_table(
             table_ref,
             destination_uri,
-            location="US"
+            location=bq_location
         )
         extract_job.result()
         logger.info(f"Finished exporting data into URI: {destination_uri}")
@@ -94,28 +95,42 @@ def execute_sandbox_ml_script(code: str, tool_context: ToolContext) -> dict:
         bucket_name = bucket_uri.replace("gs://", "").rstrip("/")
         bucket_obj = storage_client.bucket(bucket_name)
         
-        logger.info("Locating staged CSV dataset inside storage bucket...")
+        logger.info(f"Locating staged CSV dataset in bucket: gs://{bucket_name}/dataset_exports/...")
         blobs = bucket_obj.list_blobs(prefix="dataset_exports/")
         csv_blob = None
         for b in blobs:
+            logger.info(f"  Found staged blob: gs://{bucket_name}/{b.name} (size: {b.size} bytes)")
             if b.name.endswith(".csv"):
                 csv_blob = b
-                break
                 
         if not csv_blob:
             raise FileNotFoundError(f"No staged dataset CSV file found inside storage bucket path: gs://{bucket_name}/dataset_exports/")
             
-        logger.info(f"Downloading staged dataset from GCS: gs://{bucket_name}/{csv_blob.name}...")
+        logger.info(f"Downloading staged dataset from GCS: gs://{bucket_name}/{csv_blob.name} (size: {csv_blob.size} bytes)...")
         csv_bytes = csv_blob.download_as_bytes()
+        logger.info("Staged CSV dataset successfully downloaded as bytes from GCS.")
         
         # 2. Package dataset CSV as an input file to the Sandbox container
-        import base64
-        encoded_content = base64.b64encode(csv_bytes).decode("utf-8")
-        input_file = File(name="input.csv", content=encoded_content, mime_type="text/csv")
+        csv_text = csv_bytes.decode("utf-8", errors="ignore")
         
-        logger.info("Obtaining sandboxed code executor instance...")
-        executor = get_code_executor()
+        # Truncate dataset to first 1000 rows to prevent exceeding HTTP JSON payload limits
+        lines = csv_text.splitlines()
+        truncated_text = "\n".join(lines[:1000])
+        logger.info(f"Truncated staged CSV to first 1000 rows for safe HTTP JSON transmission (size: {len(truncated_text)} characters)")
         
+        input_file = File(name="input.csv", content=truncated_text, mime_type="text/csv")
+        
+        # Check if we can reuse a cached sandbox from previous run
+        from google.adk.code_executors.agent_engine_sandbox_code_executor import AgentEngineSandboxCodeExecutor
+        
+        sandbox_name = tool_context.state.get("sandbox_resource_name")
+        if sandbox_name:
+            logger.info(f"Reusing active Sandbox container: {sandbox_name}")
+            executor = AgentEngineSandboxCodeExecutor(sandbox_resource_name=sandbox_name)
+        else:
+            logger.info("Obtaining fresh sandboxed code executor instance...")
+            executor = get_code_executor()
+            
         invocation_context = tool_context._invocation_context
         
         logger.info("Dispatching Python script to Cloud Sandbox container environment...")
@@ -126,6 +141,11 @@ def execute_sandbox_ml_script(code: str, tool_context: ToolContext) -> dict:
             CodeExecutionInput(code=code, input_files=[input_file])
         )
         
+        # Cache the created sandbox resource name for future reuse
+        if not sandbox_name and executor.sandbox_resource_name:
+            tool_context.state["sandbox_resource_name"] = executor.sandbox_resource_name
+            logger.info(f"Cached active Sandbox resource name for reuse: {executor.sandbox_resource_name}")
+        
         logger.info("Sandbox code execution completed successfully.")
         logger.debug(f"Execution stdout output: {result.stdout}")
         logger.debug(f"Execution stderr output: {result.stderr}")
@@ -134,8 +154,10 @@ def execute_sandbox_ml_script(code: str, tool_context: ToolContext) -> dict:
             logger.warning("Warning: Sandbox execution returned completely empty stdout and stderr.")
             
         # 3. Check if trained model binary was returned from Sandbox container
+        logger.info(f"Inspecting sandbox execution return files. Total returned files: {len(result.output_files)}")
         model_bytes = None
         for f in result.output_files:
+            logger.info(f"  Captured output file: {f.name} (content length: {len(f.content) if f.content else 0} bytes)")
             if f.name == "model.joblib":
                 # If content is string (base64), decode it to bytes
                 if isinstance(f.content, str):
